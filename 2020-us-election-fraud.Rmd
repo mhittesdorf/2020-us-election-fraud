@@ -29,13 +29,18 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # **1. Introduction**
 
-# **2. Pennsylvania mail-in ballots**
+
+# **2. Pennsylvania 2020 General Election Results**
+
+![](img/pa-election-results-2020-11-30 12-42-37.png)
+
+# **3. Mail-in ballot summary statistics**
 
 [source: opendataPA CommonWealth of Pennsylvania](https://data.pa.gov/Government-Efficiency-Citizen-Engagement/2020-General-Election-Mail-Ballot-Requests-Departm/mcba-yywm)
 
 **NOTE:** This data is no longer publicly available. Access has been blocked with no explanation. Could it be that the data has been useful in identifying instances of fraud in certain Pennsylvania counties? What do the election authorities in Pennsylvania have to hide??
 
-Fortunately, I downloaded this data shortly after the 11/4/2020 election and can be found in the 'data' directory of this project.
+Fortunately, I downloaded this data on 11/11/2020 and it can be found in the 'data' directory of this project.
 
 ![](img/open-pa-data-restricted-20201127.png)
 
@@ -50,42 +55,74 @@ mail_ballot_requests <- spark_read_csv(sc, "data/2020_General_Election_Mail_Ball
 mail_ballot_requests %>% sample_n(10)
 
 ```
+## Types of absentee ballots in Pennsylvania
+
+```{r}
+mail_ballot_requests %>% group_by(Mail_Application_Type) %>% count() %>% arrange(desc(n))
+```
+
+
+
+## Total mail-in ballots by county with overall total
+
+All ballots without a return date are excluded in the table below. Note that the total number of mail-in ballots is less than that reported on the Pennsylvania election results Web site (2,553,094 < 2,589,242). The difference is 36148 ballots, which is 1.4% of the total. 
+
+It is possible that these ballots were rejected for a valid reason (i.e. spoiled ballots).
+
+```{r}
+
+mail_ballot_requests %>% filter(!is.na(Ballot_Returned_Date)) %>% group_by(County_Name) %>% summarise(n = n()) %>% mutate(total = sum(n)) %>% mutate(percent = round(100 * n/total,1)) %>% arrange(desc(n))
+
+```
 ## Number of mail-in ballots by party affiliation
 
 This query shows the number of mail-in ballots by party designation (Republican or Democrat) and county.
 
-**NOTE:** Third party ballots have been excluded
 
 ```{r}
 
-mail_ballot_requests %>% filter(Applicant_Party_Designation %in% c('R', 'D')) %>% count(County_Name, Applicant_Party_Designation, sort = TRUE) 
-
+mail_ballot_requests %>% filter(!is.na(Ballot_Returned_Date)) %>% group_by(Applicant_Party_Designation) %>% summarise(n = count()) %>% mutate(total = sum(n)) %>% mutate(percent = round(100 * n/total,1)) %>% arrange(desc(n))
 ```
-## Number of ballots requested in Allegheny county by age
+# **4. Age analysis**
+
+## Number of ballots returned by age
 
 The birth date of 1/1/1800 is used to protected the privacy of certain registered voters (i.e. age = 220)
 
 ```{r}
 
-mail_ballot_requests %>% filter(County_Name == 'ALLEGHENY') %>% mutate(Age = floor(datediff(current_date(), to_date(Date_of_Birth, 'MM/dd/yyyy'))/365.25)) %>% group_by(Age) %>% tally() %>% arrange(desc(Age))
+mail_ballot_requests %>% filter(!is.na(Ballot_Returned_Date)) %>% mutate(Age = floor(datediff(current_date(), to_date(Date_of_Birth, 'MM/dd/yyyy'))/365.25)) %>% group_by(Age) %>% tally() %>% arrange(desc(Age))
 
 ```
-```{r}
-
-mail_ballot_requests %>% filter(County_Name == 'PHILADELPHIA') %>% mutate(Age = floor(datediff(current_date(), to_date(Date_of_Birth, 'MM/dd/yyyy'))/365.25)) %>% group_by(Age) %>% tally() %>% arrange(desc(Age))
-
-```
-
+## Total number of ballots returned by those 85 years of age or older
 
 ```{r}
 
-mail_ballot_requests %>% filter(County_Name == 'ALLEGHENY') %>% mutate(Age = floor(datediff(current_date(), to_date(Date_of_Birth, 'MM/dd/yyyy'))/365.25)) %>% filter(Age > 92 && Age < 221) %>% select(Age, Application_Approved_Date, Application_Return_Date, Ballot_Mailed_Date, Ballot_Returned_Date) %>% arrange(Age)
+mail_ballot_requests %>% filter(!is.na(Ballot_Returned_Date)) %>% mutate(Age = floor(datediff(current_date(), to_date(Date_of_Birth, 'MM/dd/yyyy'))/365.25)) %>% filter(Age >= 85) %>% tally()
 
 ```
+# **5. Ballot turnaround**
+
+## Total ballots processed in one day or less
+
+It is very unlikely that a ballot could be mailed, received, marked by the voter, mailed back and processed in one day or less. As such, these ballots should be audited or summarily rejected.
 
 ```{r}
-mail_ballot_requests %>% filter(County_Name == 'ALLEGHENY') %>% mutate(Age = floor(datediff(current_date(), to_date(Date_of_Birth, 'MM/dd/yyyy'))/365.25)) %>% filter(Age > 99 && Age < 221) %>% count()
+mail_ballot_requests %>% filter(!is.na(Ballot_Returned_Date)) %>% mutate(Ballot_Turnaround_Days = datediff(to_date(Ballot_Returned_Date, 'MM/dd/yyyy'), to_date(Ballot_Mailed_Date, 'MM/dd/yyyy'))) %>% filter(Ballot_Turnaround_Days <= 1) %>% tally()
 ```
+
+
+## Ballots processed in more than 1 day by party designation
+
+NOTE: assumes ballots take more than one day to completely process, so such ballots should be rejected.
+
+```{r}
+
+mail_ballot_requests %>% filter(!is.na(Ballot_Returned_Date)) %>% mutate(Ballot_Turnaround_Days = datediff(to_date(Ballot_Returned_Date, 'MM/dd/yyyy'), to_date(Ballot_Mailed_Date, 'MM/dd/yyyy'))) %>% filter(Ballot_Turnaround_Days > 1) %>%  group_by(Applicant_Party_Designation) %>% summarise(n = n()) %>% mutate(total = sum(n)) %>% mutate(percent = round(100 * n/total,1)) %>% arrange(desc(n))
+
+
+```
+
 
 ```{r}
 
@@ -99,13 +136,6 @@ mail_ballot_requests %>% filter(County_Name == 'ALLEGHENY') %>% mutate(Ballot_Tu
 mail_ballot_requests %>% filter(County_Name == 'PHILADELPHIA') %>% mutate(Ballot_Turnaround_Days = datediff(to_date(Ballot_Returned_Date, 'MM/dd/yyyy'), to_date(Ballot_Mailed_Date, 'MM/dd/yyyy'))) %>% pull(Ballot_Turnaround_Days) %>% hist(main = "Histogram of Ballot Turnaround Days for Philadelphia County, PA", xlim = c(0, 50), las=1)
 
 ```
-```{r}
-
-mail_ballot_requests %>% filter(County_Name == 'ALLEGHENY') %>% filter(Applicant_Party_Designation %in% c('R', 'D')) %>% count(Applicant_Party_Designation) %>% collect()
-
-```
-
-
 
 ```{r}
 
@@ -114,14 +144,14 @@ mail_ballot_requests %>% filter(Applicant_Party_Designation %in% c('R', 'D','IND
 ```
 
 ```{r}
-mail_ballot_requests %>% mutate(Ballot_Turnaround_Days = datediff(to_date(Ballot_Returned_Date, 'MM/dd/yyyy'), to_date(Ballot_Mailed_Date, 'MM/dd/yyyy'))) %>% filter(Ballot_Turnaround_Days <= 2) %>% count(County_Name, sort = TRUE)
+mail_ballot_requests %>% mutate(Ballot_Turnaround_Days = datediff(to_date(Ballot_Returned_Date, 'MM/dd/yyyy'), to_date(Ballot_Mailed_Date, 'MM/dd/yyyy'))) %>% filter(Ballot_Turnaround_Days <= 1) %>% group_by(County_Name) %>% summarise(n = count()) %>% mutate(total = sum(n)) %>% mutate(percent = round(100* (n/total),1)) %>% arrange(desc(n))
 ```
 ```{r}
 mail_ballot_requests %>% mutate(Ballot_Turnaround_Days = datediff(to_date(Ballot_Returned_Date, 'MM/dd/yyyy'), to_date(Ballot_Mailed_Date, 'MM/dd/yyyy'))) %>% filter(Ballot_Turnaround_Days <= 2) %>% mutate(Age = floor(datediff(current_date(), to_date(Date_of_Birth, 'MM/dd/yyyy'))/365))
 ```
 
 ```{r}
-mail_ballot_requests %>% filter(County_Name %in% c('PHILADELPHIA', 'ALLEGHENY', 'LEHIGH', 'CHESTER', 'MONTGOMERY')) %>% mutate(Ballot_Turnaround_Days = datediff(to_date(Ballot_Returned_Date, 'MM/dd/yyyy'), to_date(Ballot_Mailed_Date, 'MM/dd/yyyy'))) %>% filter(Ballot_Turnaround_Days <= 1) %>% mutate(Age = floor(datediff(current_date(), to_date(Date_of_Birth, 'MM/dd/yyyy'))/365)) %>% ggplot(aes(x = Age)) + geom_histogram()
+mail_ballot_requests %>% filter(County_Name %in% c('PHILADELPHIA', 'ALLEGHENY', 'LEHIGH', 'CHESTER', 'MONTGOMERY')) %>% mutate(Ballot_Turnaround_Days = datediff(to_date(Ballot_Returned_Date, 'MM/dd/yyyy'), to_date(Ballot_Mailed_Date, 'MM/dd/yyyy'))) %>% filter(Ballot_Turnaround_Days <= 2) %>% mutate(Age = floor(datediff(current_date(), to_date(Date_of_Birth, 'MM/dd/yyyy'))/365.25)) %>% ggplot(aes(x = Age)) + geom_histogram()
 ```
 
 ```{r}
@@ -150,3 +180,17 @@ mail_ballot_requests %>% filter(County_Name %in% c('CHESTER', 'MONTGOMERY', 'CUM
   geom_histogram(bins = 20, na.rm = TRUE) +
   facet_wrap(~ County_Name)
 ```
+# **4. Pennsylvania voter registrations**
+
+```{r}
+philly_voter_registrations <- spark_read_csv(sc, path="data/Statewide/PHILADELPHIA FVE 20201123.txt", header = FALSE, delimiter = '\t')
+```
+
+## Total registered voters in Philadelphia county
+
+```{r}
+
+philly_voter_registrations %>% summar
+
+```
+
